@@ -79,3 +79,72 @@ per product in the same order, like this:
     };
   });
 }
+/**
+ * SRS Feature 4: "Use AI to check: does this listing look real or fake?
+ * Show a badge for it."
+ *
+ * SRS Section 8, Question 2: "Here is a product's price, rating, and
+ * number of reviews. Does this look like a genuine, trustworthy listing,
+ * or does it look fake/spam? Give a score from 0 to 100 and a short reason."
+ */
+export async function checkGenuinenessBatch(products) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is not set');
+  }
+
+  if (products.length === 0) return [];
+
+  const productList = products
+    .map(
+      (p, i) =>
+        `${i}. "${p.name}" — price: $${p.price ?? 'unknown'}, rating: ${
+          p.rating ?? 'no rating'
+        }, review count: ${p.review_count ?? 0}`
+    )
+    .join('\n');
+
+  const prompt = `You are checking online product listings for signs of being fake,
+spam, or untrustworthy — using only price, rating, and review count
+(no review text). Signs of a fake/low-trust listing include: a rating
+with zero or very few reviews, prices that are suspiciously low or
+high for the product type, or round/generic numbers that look padded.
+
+Products:
+${productList}
+
+Respond with ONLY a JSON array (no markdown, no extra text), one object
+per product in the same order, like this:
+[{"index": 0, "genuine_score": 85, "reason": "Established price point with a large, consistent review count"}, ...]
+
+"genuine_score" is an integer from 0 (looks fake/spam) to 100 (looks
+genuine and trustworthy). "reason" is a short (under 15 words) explanation.`;
+
+  const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: 'application/json' },
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Gemini API error: ${response.status} ${errText}`);
+  }
+
+  const data = await response.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) throw new Error('Gemini returned no usable content for genuineness check');
+
+  const parsed = JSON.parse(rawText);
+
+  return products.map((_, i) => {
+    const match = parsed.find((entry) => entry.index === i);
+    return {
+      genuine_score: match?.genuine_score ?? 0,
+      genuine_reason: match?.reason ?? 'AI did not return a reason',
+    };
+  });
+}

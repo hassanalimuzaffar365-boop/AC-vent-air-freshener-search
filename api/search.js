@@ -1,18 +1,7 @@
 import { searchProducts } from './lib/serper.js';
 import { getFreshCache, getAnyCache, saveResultsToCache } from './lib/cache.js';
-import { checkCategoryBatch } from './lib/gemini.js';
+import { checkCategoryBatch, checkGenuinenessBatch } from './lib/gemini.js';
 
-/**
- * GET /api/search?q=lavender+vent+air+freshener
- *
- * DAY 2 SCOPE (Feature 3 added): after a live search, every candidate
- * is now run through the AI category check (Section 8, Question 1)
- * before being saved/shown. Anything that isn't really a vent-mount
- * freshener gets dropped here.
- *
- * Feature 4 (AI genuineness check) is the next commit - not in this
- * file yet.
- */
 export default async function handler(req, res) {
   const query = (req.query.q || '').trim();
 
@@ -21,7 +10,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Step 2: recent cache check
     const freshCache = await getFreshCache(query);
     if (freshCache && freshCache.length > 0) {
       return res.status(200).json({
@@ -32,14 +20,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // Step 3: live search
     let rawResults;
     try {
       rawResults = await searchProducts(query);
     } catch (err) {
       console.error('[search] Serper call failed, falling back to saved:', err.message);
 
-      // Step 7: live search failed -> fall back to any saved answer, however old
       const fallback = await getAnyCache(query);
       if (fallback && fallback.length > 0) {
         return res.status(200).json({
@@ -56,18 +42,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // Step 4: AI category check - drop anything that isn't a vent freshener
     let categoryResults;
     try {
       categoryResults = await checkCategoryBatch(rawResults);
     } catch (err) {
       console.error('[search] Gemini category check failed:', err.message);
-      // If the AI check itself fails, don't silently show unchecked
-      // products - fail safe by returning an error instead.
-      return res.status(502).json({
-        error: 'AI category check failed',
-        detail: err.message,
-      });
+      return res.status(502).json({ error: 'AI category check failed', detail: err.message });
     }
 
     const withCategory = rawResults.map((product, i) => ({
@@ -78,8 +58,23 @@ export default async function handler(req, res) {
 
     const ventFreshenersOnly = withCategory.filter((p) => p.is_vent_freshener);
 
-    // Step 6: save the results, mark them "live"
-    const saved = await saveResultsToCache(query, ventFreshenersOnly, 'live');
+    let genuinenessResults;
+    try {
+      genuinenessResults = await checkGenuinenessBatch(ventFreshenersOnly);
+    } catch (err) {
+      console.error('[search] Gemini genuineness check failed:', err.message);
+      return res.status(502).json({ error: 'AI genuineness check failed', detail: err.message });
+    }
+
+    const withGenuineness = ventFreshenersOnly.map((product, i) => ({
+      ...product,
+      genuine_score: genuinenessResults[i].genuine_score,
+      genuine_reason: genuinenessResults[i].genuine_reason,
+    }));
+
+    withGenuineness.sort((a, b) => b.genuine_score - a.genuine_score);
+
+    const saved = await saveResultsToCache(query, withGenuineness, 'live');
 
     return res.status(200).json({
       query,
