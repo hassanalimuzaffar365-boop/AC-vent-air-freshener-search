@@ -53,7 +53,7 @@ per product in the same order, like this:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json' },
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
     }),
   });
 
@@ -66,7 +66,13 @@ per product in the same order, like this:
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) throw new Error('Gemini returned no usable content for category check');
 
-  const parsed = JSON.parse(rawText);
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch (parseErr) {
+    console.error('[gemini] Failed to parse category check response. Raw text was:', rawText);
+    throw new Error(`Gemini returned malformed JSON: ${parseErr.message}`);
+  }
 
   // Map back to the same order as the input, defaulting to "not a vent
   // freshener, low confidence" for any product Gemini didn't return an
@@ -79,6 +85,7 @@ per product in the same order, like this:
     };
   });
 }
+
 /**
  * SRS Feature 4: "Use AI to check: does this listing look real or fake?
  * Show a badge for it."
@@ -86,6 +93,10 @@ per product in the same order, like this:
  * SRS Section 8, Question 2: "Here is a product's price, rating, and
  * number of reviews. Does this look like a genuine, trustworthy listing,
  * or does it look fake/spam? Give a score from 0 to 100 and a short reason."
+ *
+ * @param {Array<{name: string, price: number, rating: number, review_count: number}>} products
+ * @returns {Promise<Array<{genuine_score: number, genuine_reason: string}>>}
+ *   Same length and order as the input array.
  */
 export async function checkGenuinenessBatch(products) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -125,7 +136,7 @@ genuine and trustworthy). "reason" is a short (under 15 words) explanation.`;
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json' },
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
     }),
   });
 
@@ -138,7 +149,13 @@ genuine and trustworthy). "reason" is a short (under 15 words) explanation.`;
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) throw new Error('Gemini returned no usable content for genuineness check');
 
-  const parsed = JSON.parse(rawText);
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch (parseErr) {
+    console.error('[gemini] Failed to parse genuineness check response. Raw text was:', rawText);
+    throw new Error(`Gemini returned malformed JSON: ${parseErr.message}`);
+  }
 
   return products.map((_, i) => {
     const match = parsed.find((entry) => entry.index === i);
