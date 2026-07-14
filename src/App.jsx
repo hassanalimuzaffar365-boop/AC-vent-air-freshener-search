@@ -1,56 +1,98 @@
 import { useState } from 'react';
+import ProductCard from './components/ProductCard.jsx';
+import './App.css';
 
-/**
- * TEMPORARY test harness for Day 1 — just enough to confirm the
- * /api/search serverless function works end to end.
- * This gets replaced by the real results page UI later
- * (SRS Section 6, Feature 6 — its own commit: "Build results page UI").
- */
 export default function App() {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState(null);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
 
   const handleSearch = async (e) => {
     e.preventDefault();
+    if (!query.trim()) return;
+
     setLoading(true);
     setError('');
-    setResults(null);
+    setHasSearched(true);
+
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Search failed');
-      setResults(data);
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`);
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Search failed');
+      setData(result);
     } catch (err) {
       setError(err.message);
+      setData(null);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: 700, margin: '40px auto', fontFamily: 'sans-serif' }}>
-      <h1>Vent Freshener Search — Day 1 test harness</h1>
-      <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8 }}>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="e.g. lavender vent air freshener"
-          style={{ flex: 1, padding: 8 }}
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? 'Searching…' : 'Search'}
-        </button>
-      </form>
+    <div className="page">
+      <header className="header">
+        <h1>Vent Freshener Search</h1>
+        <p className="subtitle">Find car AC vent-mount air fresheners — checked by AI, not guesswork.</p>
 
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+        <form className="search-form" onSubmit={handleSearch}>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="e.g. lavender vent air freshener"
+          />
+          <button type="submit" disabled={loading}>
+            {loading ? 'Searching…' : 'Search'}
+          </button>
+        </form>
+      </header>
 
-      {results && (
-        <pre style={{ background: '#f4f4f4', padding: 12, marginTop: 16, overflowX: 'auto' }}>
-          {JSON.stringify(results, null, 2)}
-        </pre>
-      )}
+      <main className="main">
+        {loading && (
+          <div className="status">
+            <div className="spinner" />
+            <p>Searching the web and checking results with AI…</p>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="status status--error">
+            <p>{error}</p>
+          </div>
+        )}
+
+        {!loading && !error && hasSearched && data && data.results.length === 0 && (
+          <div className="status">
+            <p>No vent-mount air fresheners found for "{data.query}". Try a different search.</p>
+          </div>
+        )}
+
+        {!loading && !error && data && data.results.length > 0 && (
+          <>
+            <p className="results-summary">
+              {data.count} result{data.count !== 1 ? 's' : ''} for "{data.query}" —{' '}
+              {data.source === 'live' ? (
+                <span className="results-summary__live">fresh from the web</span>
+              ) : (
+                <span className="results-summary__saved">showing saved results</span>
+              )}
+            </p>
+            <div className="grid">
+              {data.results.map((product) => (
+                <ProductCard key={product.id} product={product} source={data.source} />
+              ))}
+            </div>
+          </>
+        )}
+
+        {!loading && !hasSearched && (
+          <div className="status status--intro">
+            <p>Search above to find real, AI-checked vent-mount air fresheners.</p>
+          </div>
+        )}
+      </main>
     </div>
   );
 }
