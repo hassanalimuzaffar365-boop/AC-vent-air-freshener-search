@@ -10,8 +10,46 @@
  * on free-tier daily request limits, per Section 8's guidance.
  */
 
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent';
+// Configurable so the model can be swapped without a code change if
+// Google renames/retires one (this has already happened twice during
+// development - 2.5-flash was retired, then 3.5-flash turned out to
+// have a very low free daily quota). Set GEMINI_MODEL in .env to override.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+/**
+ * Wraps a Gemini API call with automatic retries for transient failures
+ * (503 "high demand" is common on the free tier). Retries up to 2 extra
+ * times with a short delay before giving up.
+ */
+async function fetchGeminiWithRetry(body, maxAttempts = 3) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) return response;
+
+    const errText = await response.text();
+    lastError = new Error(`Gemini API error: ${response.status} ${errText}`);
+
+    // Only retry on transient server-side errors, not on bad requests (4xx).
+    const isRetryable = response.status === 503 || response.status === 429;
+    if (!isRetryable || attempt === maxAttempts) throw lastError;
+
+    console.warn(
+      `[gemini] Attempt ${attempt} failed (${response.status}), retrying in ${attempt}s...`
+    );
+    await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+  }
+
+  throw lastError;
+}
 
 /**
  * @param {Array<{name: string}>} products
@@ -48,19 +86,10 @@ per product in the same order, like this:
 
 "confidence" is a number from 0 to 1 representing how sure you are.`;
 
-  const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
-    }),
+  const response = await fetchGeminiWithRetry({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } },
   });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API error: ${response.status} ${errText}`);
-  }
 
   const data = await response.json();
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -131,19 +160,10 @@ per product in the same order, like this:
 "genuine_score" is an integer from 0 (looks fake/spam) to 100 (looks
 genuine and trustworthy). "reason" is a short (under 15 words) explanation.`;
 
-  const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
-    }),
+  const response = await fetchGeminiWithRetry({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } },
   });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API error: ${response.status} ${errText}`);
-  }
 
   const data = await response.json();
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
