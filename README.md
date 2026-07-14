@@ -92,7 +92,56 @@ Don't commit `.env` — it's already in `.gitignore`, so your API key stays priv
 
 ---
 
-## Project status: complete
+## Architecture
+
+```mermaid
+flowchart TB
+    User["Person searching"]
+    FE["React frontend<br/>Vite"]
+    API["Vercel serverless function<br/>/api/search"]
+    DB[("Supabase<br/>Postgres")]
+    Serper["Serper.dev<br/>search API"]
+    Gemini["Google Gemini<br/>AI API (4-model fallback chain)"]
+
+    User -->|"types a search"| FE
+    FE -->|"GET /api/search?q=..."| API
+    API -->|"check for a recent cached answer"| DB
+    API -->|"live product search"| Serper
+    API -->|"category + genuineness checks"| Gemini
+    API -->|"save checked results"| DB
+    API -->|"JSON response"| FE
+    FE -->|"renders results"| User
+```
+
+**Why this shape:** the frontend never talks to Serper, Supabase, or Gemini directly — every
+external call goes through the one serverless function, so API keys stay server-side and never
+reach the browser.
+
+## Search workflow
+
+```mermaid
+flowchart TD
+    A["Person types a search"] --> B{"Recent cached<br/>answer? (&lt;24h)"}
+    B -->|"yes"| C["Show cached results<br/>marked SAVED"]
+    B -->|"no"| D["Call Serper.dev<br/>(live search)"]
+    D -->|"fails"| E{"Any saved answer<br/>exists at all?"}
+    E -->|"yes"| C
+    E -->|"no"| F["Show error"]
+    D -->|"success"| G["AI category check<br/>(Gemini)"]
+    G --> H["Keep only vent-mount<br/>fresheners"]
+    H --> I["AI genuineness check<br/>(Gemini)"]
+    I --> J["Sort by trust score"]
+    J --> K["Save to Supabase"]
+    K --> L["Show results<br/>marked LIVE"]
+```
+
+This mirrors SRS Section 5 exactly: cache-first, live search with an offline fallback, then the
+two AI checks in sequence, then save-and-display. If either AI check fails (not just Serper), the
+same saved-answer fallback in the diagram above kicks in — handled in `api/search.js`.
+
+---
+
+
 
 All 6 required features (SRS Section 6) are implemented:
 
