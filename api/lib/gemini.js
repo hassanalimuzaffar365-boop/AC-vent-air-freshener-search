@@ -10,42 +10,78 @@
  * on free-tier daily request limits, per Section 8's guidance.
  */
 
-// Configurable so the model can be swapped without a code change if
-// Google renames/retires one (this has already happened twice during
-// development - 2.5-flash was retired, then 3.5-flash turned out to
-// have a very low free daily quota). Set GEMINI_MODEL in .env to override.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+// Free-tier Gemini models have proven unstable during development —
+// models get retired for new users (2.5-flash), have very low daily
+// quotas (3.5-flash: only 20/day), or occasionally hiccup even when
+// otherwise working (3-flash-preview). Rather than depend on a single
+// model, we try a short chain of models in order and fall through to
+// the next one if a model fails. GEMINI_MODEL in .env, if set, is tried
+// first; the rest of the chain is a fixed safety net after it.
+const FALLBACK_MODEL_CHAIN = [
+  'gemini-3-flash-preview',
+  'gemini-2.0-flash',
+  'gemini-flash-lite-latest',
+  'gemma-4-31b-it',
+];
+
+function getModelChain() {
+  const envModel = process.env.GEMINI_MODEL;
+  if (envModel) {
+    return [envModel, ...FALLBACK_MODEL_CHAIN.filter((m) => m !== envModel)];
+  }
+  return FALLBACK_MODEL_CHAIN;
+}
 
 /**
- * Wraps a Gemini API call with automatic retries for transient failures
- * (503 "high demand" is common on the free tier). Retries up to 2 extra
- * times with a short delay before giving up.
+ * Tries each model in the chain, retrying transient errors (503/429)
+ * up to `attemptsPerModel` times before moving on to the next model.
+ * Non-retryable errors (like 404 - model doesn't exist) skip straight
+ * to the next model instead of wasting retries.
  */
-async function fetchGeminiWithRetry(body, maxAttempts = 3) {
+async function fetchGeminiWithRetry(body, attemptsPerModel = 2) {
   const apiKey = process.env.GEMINI_API_KEY;
+  const modelChain = getModelChain();
   let lastError;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+  for (const model of modelChain) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-    if (response.ok) return response;
+    for (let attempt = 1; attempt <= attemptsPerModel; attempt++) {
+      const response = await fetch(`${url}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
 
-    const errText = await response.text();
-    lastError = new Error(`Gemini API error: ${response.status} ${errText}`);
+      if (response.ok) {
+        console.log(`[gemini] Success using model: ${model}`);
+        return response;
+      }
 
-    // Only retry on transient server-side errors, not on bad requests (4xx).
-    const isRetryable = response.status === 503 || response.status === 429;
-    if (!isRetryable || attempt === maxAttempts) throw lastError;
+      const errText = await response.text();
+      lastError = new Error(`Gemini API error (${model}): ${response.status} ${errText}`);
 
-    console.warn(
-      `[gemini] Attempt ${attempt} failed (${response.status}), retrying in ${attempt}s...`
-    );
-    await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      if (response.status === 429) {
+        // 429 here means the model's daily free-tier quota is exhausted
+        // (per Google's error body: "GenerateRequestsPerDayPerProjectPerModel").
+        // Waiting a few seconds won't help - move straight to the next model.
+        console.warn(`[gemini] ${model} daily quota exhausted (429), trying next model...`);
+        break;
+      }
+
+      const isRetryable = response.status === 503;
+      if (!isRetryable) {
+        console.warn(`[gemini] ${model} returned ${response.status} (non-retryable), trying next model...`);
+        break;
+      }
+      if (attempt === attemptsPerModel) {
+        console.warn(`[gemini] ${model} exhausted retries (${response.status}), trying next model...`);
+        break;
+      }
+
+      console.warn(`[gemini] ${model} attempt ${attempt} failed (${response.status}), retrying in ${attempt}s...`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
   }
 
   throw lastError;
