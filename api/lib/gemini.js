@@ -14,7 +14,7 @@
 // Google renames/retires one (this has already happened twice during
 // development - 2.5-flash was retired, then 3.5-flash turned out to
 // have a very low free daily quota). Set GEMINI_MODEL in .env to override.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 /**
