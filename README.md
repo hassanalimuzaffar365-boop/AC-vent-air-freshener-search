@@ -5,7 +5,30 @@ vent-mount air fresheners: live web search + AI category/genuineness checks +
 offline fallback.
 
 **Stack:** React (Vite) frontend + Vercel serverless functions (`/api`) + Supabase (Postgres)
-**Research picks:** Serper.dev (search API) + Google Gemini (AI API) — both free, no credit card.
+
+**Live app:** https://vent-search-simple.vercel.app
+
+---
+
+## Research task (required write-up)
+
+### Search API: Serper.dev
+Serper.dev was chosen because it is genuinely free (2,500 one-time free
+queries, no recurring charge required to get started) and does not ask for
+a credit card at signup. Its "shopping" search type returns exactly the
+fields this project needs per product — title, price, rating, review count,
+image, and a direct link — without any extra parsing. It is also fast
+(typically 1-2 second response times), which keeps live search feeling
+responsive.
+
+### AI API: Google Gemini
+Google Gemini (via Google AI Studio) was chosen because it offers a
+genuinely permanent free tier (not just a one-time trial credit), with no
+credit card required at any point. It has a real, documented API suited to
+programmatic use (unlike some competitors whose free access is limited to
+a consumer chat app), which is exactly what's needed to send batched
+product data and get structured JSON answers back for both the category
+check and the genuineness check.
 
 ---
 
@@ -69,18 +92,40 @@ Don't commit `.env` — it's already in `.gitignore`, so your API key stays priv
 
 ---
 
-## What's built so far (Day 1 only)
+## Project status: complete
 
-- `api/lib/serper.js` — Serper.dev client, normalizes results to our product shape
-- `api/search.js` — `/api/search?q=...` endpoint, live search only (no DB, no AI yet)
-- `src/App.jsx` — temporary test harness (shows raw JSON) — gets replaced by the real
-  results page UI later
-- `supabase/schema.sql` — database schema, ready for Day 2 (not connected yet)
+All 6 required features (SRS Section 6) are implemented:
 
-## What's next (Day 2)
+| # | Feature | Where |
+|---|---|---|
+| 1 | Live search via Serper.dev | `api/lib/serper.js`, `api/search.js` |
+| 2 | Save results to Supabase + offline/saved fallback | `api/lib/cache.js`, `api/lib/supabase.js` |
+| 3 | AI category check (Gemini) | `api/lib/gemini.js` — `checkCategoryBatch` |
+| 4 | AI genuineness check (Gemini) | `api/lib/gemini.js` — `checkGenuinenessBatch` |
+| 5 | Sort by most trustworthy first | `api/search.js` |
+| 6 | Results page UI (photo, price, rating, Live/Saved tag, Genuine/Not Sure tag) | `src/App.jsx`, `src/components/ProductCard.jsx`, `src/App.css` |
 
-- Save results to Supabase with a timestamp
-- Check for a recent cached search before hitting Serper
-- Fall back to saved results if Serper fails
-- AI category check (Gemini): is this really a vent freshener?
-- AI genuineness check (Gemini): does this listing look real or fake?
+Feature 7 (manual refresh button) was skipped per the plan's own priority guidance
+("skip this first if running low on time").
+
+### Robustness additions beyond the base spec
+- Gemini calls automatically retry on transient 503/429 errors before failing.
+- The saved/offline fallback triggers on **any** pipeline failure (Serper down,
+  or either AI check down), not just Serper — matching the "AI service downtime"
+  risk called out in Section 12.
+- Cache reads re-verify `is_vent_freshener` before returning results, so a
+  stale/pre-AI-check cache entry can never resurface off-category products.
+
+### Section 8 accuracy proof
+A manually curated list of 10 genuine vent fresheners and 10 fake/wrong-category/
+spam listings (`test-accuracy.js`) was run against both AI checks:
+- Category check accuracy: **20/20 (100%)**
+- Genuineness check accuracy: **13/13 (100%)**
+
+Run it yourself with `node test-accuracy.js` (requires `GEMINI_API_KEY` in `.env`).
+
+### Deployment
+- Code: pushed to GitHub, feature-by-feature commit history (see `git log --oneline`)
+- Hosting: Vercel (auto-deploys on push to `main`)
+- Database: Supabase (Postgres)
+- Live: https://vent-search-simple.vercel.app
